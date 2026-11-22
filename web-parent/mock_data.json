@@ -1,0 +1,87 @@
+{
+    "device": {
+      "id": "DEV-8841",
+      "name": "Galaxy A15 - Minh",
+      "os": "Android 14",
+      "status": "online",
+      "screenTimeToday": "1h 45m",
+      "dailyLimitHours": 3
+    },
+    "logs": [
+      {
+        "id": 101,
+        "timestamp": "2026-11-21 19:05",
+        "app": "Messenger",
+        "text": "Tan học mày đợi đấy, tao gọi người chặn đánh",
+        "label": 2,
+        "category": "Danger",
+        "confidence": 0.9642,
+        "action": "Blocked"
+      },
+      {
+        "id": 102,
+        "timestamp": "2026-11-21 18:40",
+        "app": "Zalo",
+        "text": "Đồ ngu, có mỗi bài Toán dễ thế này mà cũng làm sai",
+        "label": 1,
+        "category": "Warning",
+        "confidence": 0.8815,
+        "action": "Warned"
+      },
+      {
+        "id": 103,
+        "timestamp": "2026-11-21 17:15",
+        "app": "YouTube",
+        "text": "Hôm nay lớp con có bài kiểm tra Toán",
+        "label": 0,
+        "category": "Safe",
+        "confidence": 0.9910,
+        "action": "Allowed"
+      },
+      {
+        "id": 104,
+        "timestamp": "2026-11-21 16:02",
+        "app": "Facebook",
+        "text": "Tao hack Facebook của mày bây giờ",
+        "label": 2,
+        "category": "Danger",
+        "confidence": 0.9480,
+        "action": "Blocked"
+      },
+      {
+        "id": 105,
+        "timestamp": "2026-11-21 14:50",
+        "app": "TikTok",
+        "text": "Thằng này bẩn bựa vãi, đừng có chơi cùng nó",
+        "label": 1,
+        "category": "Warning",
+        "confidence": 0.8530,
+        "action": "Warned"
+      },
+      {
+        "id": 106,
+        "timestamp": "2026-11-21 13:20",
+        "app": "Zalo",
+        "text": "Tối nay tớ qua nhà cậu lấy vở nhé",
+        "label": 0,
+        "category": "Safe",
+        "confidence": 0.9854,
+        "action": "Allowed"
+      }
+    ],
+    "unlockRequests": [
+      {
+        "id": "REQ-01",
+        "time": "19:08",
+        "app": "Messenger",
+        "reason": "Con đang nhắn tin hỏi bài nhóm bạn, tin nhắn kia là bạn trêu đùa ạ.",
+        "status": "pending"
+      }
+    ],
+    "rules": [
+      { "id": 1, "keyword": "chặn đánh", "level": "Danger" },
+      { "id": 2, "keyword": "hack facebook", "level": "Danger" },
+      { "id": 3, "keyword": "đồ ngu", "level": "Warning" },
+      { "id": 4, "keyword": "bẩn bựa", "level": "Warning" }
+    ]
+  }
