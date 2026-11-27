@@ -1,7 +1,8 @@
 const USERS_KEY = 'pc_users_v1';
 const SESSION_KEY = 'pc_current_user';
+const TOKEN_KEY = 'pc_access_token';
 const DEMO_EMAIL = 'parent@parentalcontrol.vn';
-const AI_API_URL = 'http://127.0.0.1:8000/predict';
+const API_BASE_URL = 'http://127.0.0.1:8080/api/v1';
 
 const DEFAULT_USERS = [
   { name: 'Demo', email: DEMO_EMAIL, password: 'Parent@123' }
@@ -13,8 +14,8 @@ const DEMO_STATE = {
     name: 'Galaxy A15 - Minh',
     os: 'Android 14',
     status: 'online',
-    screenTimeToday: '1h 45m',
-    dailyLimitHours: 3
+    screen_time_minutes: 105,
+    daily_limit_hours: 3
   },
   logs: [
     {
@@ -89,9 +90,30 @@ const EMPTY_NEW_USER_STATE = {
 let appState = null;
 let currentUser = null;
 let labelChart = null;
+let devicePollTimer = null;
 
 function getStorageKey(email) {
   return `pc_state_${email.toLowerCase()}`;
+}
+
+function getAuthToken() {
+  return sessionStorage.getItem(TOKEN_KEY);
+}
+
+function getAuthHeaders() {
+  const headers = { 'Content-Type': 'application/json' };
+  const token = getAuthToken();
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+  return headers;
+}
+
+function formatMinutesToHoursText(minutes) {
+  const mins = Number(minutes) || 0;
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  return `${h}h ${String(m).padStart(2, '0')}m`;
 }
 
 function getUsers() {
@@ -110,6 +132,10 @@ function loadStateForUser(email) {
   const saved = localStorage.getItem(key);
   if (saved) {
     appState = JSON.parse(saved);
+    if (appState.device && appState.device.screen_time_minutes === undefined) {
+      appState.device.screen_time_minutes = 105;
+      appState.device.daily_limit_hours = appState.device.dailyLimitHours || 3;
+    }
   } else {
     const template = email.toLowerCase() === DEMO_EMAIL ? DEMO_STATE : EMPTY_NEW_USER_STATE;
     appState = JSON.parse(JSON.stringify(template));
@@ -196,6 +222,51 @@ function switchAuthMode(mode) {
     : 'py-1.5 rounded-md text-slate-500 hover:text-slate-800';
 }
 
+async function fetchDevicesFromBackend() {
+  const token = getAuthToken();
+  if (!token || !currentUser) return;
+
+  try {
+    const res = await fetch(`${API_BASE_URL}/devices`, {
+      method: 'GET',
+      headers: getAuthHeaders()
+    });
+    if (!res.ok) return;
+
+    const data = await res.json();
+    const list = Array.isArray(data) ? data : (data.devices || data.items || []);
+    if (list.length > 0) {
+      const dev = list[0];
+      appState.device = {
+        id: dev.id,
+        name: dev.name || dev.device_name || 'Thiết bị Android',
+        os: dev.os || dev.os_version || 'Android',
+        status: dev.status || (dev.is_online ? 'online' : 'offline'),
+        screen_time_minutes: Number(dev.screen_time_minutes ?? 0),
+        daily_limit_hours: Number(dev.daily_limit_hours ?? 3)
+      };
+      saveState();
+      renderDeviceInfo();
+      document.getElementById('input-daily-limit').value = appState.device.daily_limit_hours;
+    }
+  } catch {
+    // Offline fallback: giữ nguyên state hiện tại trong localStorage
+  }
+}
+
+function startDevicePolling() {
+  stopDevicePolling();
+  fetchDevicesFromBackend();
+  devicePollTimer = setInterval(fetchDevicesFromBackend, 7000);
+}
+
+function stopDevicePolling() {
+  if (devicePollTimer) {
+    clearInterval(devicePollTimer);
+    devicePollTimer = null;
+  }
+}
+
 function bindEvents() {
   document.getElementById('tab-btn-login').addEventListener('click', () => switchAuthMode('login'));
   document.getElementById('tab-btn-register').addEventListener('click', () => switchAuthMode('register'));
@@ -204,11 +275,45 @@ function bindEvents() {
     updatePasswordChecklist(e.target.value);
   });
 
-  document.getElementById('form-login').addEventListener('submit', (e) => {
+  document.getElementById('form-login').addEventListener('submit', async (e) => {
     e.preventDefault();
     const email = document.getElementById('login-email').value.trim().toLowerCase();
     const pass = document.getElementById('login-password').value;
 
+    // 1. Thử đăng nhập với Backend thật (cổng 8080)
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 1500);
+      const res = await fetch(`${API_BASE_URL}/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password: pass }),
+        signal: controller.signal
+      });
+      clearTimeout(timer);
+
+      if (res.ok) {
+        const data = await res.json();
+        const token = data.access_token || data.token;
+        if (token) {
+          sessionStorage.setItem(TOKEN_KEY, token);
+        }
+        const userObj = {
+          name: data.user?.name || (email === DEMO_EMAIL ? 'Demo' : email.split('@')[0]),
+          email: email
+        };
+        sessionStorage.setItem(SESSION_KEY, JSON.stringify(userObj));
+        showMainView(userObj);
+        return;
+      } else if (res.status === 401 || res.status === 400) {
+        showAuthMessage('Email hoặc mật khẩu không chính xác trên hệ thống.');
+        return;
+      }
+    } catch {
+      // Backend chưa bật -> tự động chuyển sang xác thực cục bộ (localStorage)
+    }
+
+    // 2. Fallback cục bộ khi chạy Demo offline
     const users = getUsers();
     const matched = users.find((u) => u.email.toLowerCase() === email && u.password === pass);
 
@@ -217,11 +322,12 @@ function bindEvents() {
       return;
     }
 
+    sessionStorage.removeItem(TOKEN_KEY);
     sessionStorage.setItem(SESSION_KEY, JSON.stringify(matched));
     showMainView(matched);
   });
 
-  document.getElementById('form-register').addEventListener('submit', (e) => {
+  document.getElementById('form-register').addEventListener('submit', async (e) => {
     e.preventDefault();
     const name = document.getElementById('reg-name').value.trim();
     const email = document.getElementById('reg-email').value.trim().toLowerCase();
@@ -235,6 +341,21 @@ function bindEvents() {
     if (pass !== confirm) {
       showAuthMessage('Mật khẩu xác nhận không khớp.');
       return;
+    }
+
+    // Thử gọi đăng ký lên Backend nếu có
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 1500);
+      await fetch(`${API_BASE_URL}/auth/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, email, password: pass }),
+        signal: controller.signal
+      });
+      clearTimeout(timer);
+    } catch {
+      // Bỏ qua nếu offline
     }
 
     const users = getUsers();
@@ -256,7 +377,9 @@ function bindEvents() {
   });
 
   document.getElementById('btn-logout').addEventListener('click', () => {
+    stopDevicePolling();
     sessionStorage.removeItem(SESSION_KEY);
+    sessionStorage.removeItem(TOKEN_KEY);
     currentUser = null;
     document.getElementById('view-main').classList.add('hidden');
     document.getElementById('view-auth').classList.remove('hidden');
@@ -270,6 +393,7 @@ function bindEvents() {
       document.getElementById('predict-result-box').innerHTML =
         '<div class="text-xs text-slate-400">Nhập nội dung phía trên và bấm <strong>Kiểm tra</strong> để xem mức độ đánh giá.</div>';
       renderAll();
+      fetchDevicesFromBackend();
     }
   });
 
@@ -280,23 +404,64 @@ function bindEvents() {
   document.getElementById('filter-label').addEventListener('change', renderLogs);
   document.getElementById('btn-run-predict').addEventListener('click', handleSimulatePredict);
 
-  document.getElementById('btn-new-pin').addEventListener('click', () => {
+  // Nút Tạo mã mới -> gọi POST /api/v1/pairing/pin
+  document.getElementById('btn-new-pin').addEventListener('click', async () => {
+    const pinEl = document.getElementById('text-pin');
+    const token = getAuthToken();
+
+    if (token) {
+      try {
+        const res = await fetch(`${API_BASE_URL}/pairing/pin`, {
+          method: 'POST',
+          headers: getAuthHeaders()
+        });
+        if (res.ok) {
+          const data = await res.json();
+          const rawPin = String(data.pin || data.code || '').replace(/\s+/g, '');
+          if (rawPin.length === 6) {
+            pinEl.textContent = `${rawPin.slice(0, 3)} ${rawPin.slice(3)}`;
+            return;
+          } else if (rawPin) {
+            pinEl.textContent = rawPin;
+            return;
+          }
+        }
+      } catch {
+        // Fallback random nếu rớt mạng
+      }
+    }
+
     const code = Math.floor(100000 + Math.random() * 900000).toString();
-    document.getElementById('text-pin').textContent = `${code.slice(0, 3)} ${code.slice(3)}`;
+    pinEl.textContent = `${code.slice(0, 3)} ${code.slice(3)}`;
   });
 
-  document.getElementById('btn-save-limit').addEventListener('click', () => {
+  // Ô giới hạn giờ -> gọi PATCH /api/v1/devices/{id}
+  document.getElementById('btn-save-limit').addEventListener('click', async () => {
     const input = document.getElementById('input-daily-limit');
     const val = Number(input.value);
     if (!Number.isInteger(val) || val < 1 || val > 12) {
       alert('Vui lòng nhập số giờ nguyên từ 1 đến 12.');
-      input.value = appState.device ? appState.device.dailyLimitHours : 3;
+      input.value = appState.device ? appState.device.daily_limit_hours : 3;
       return;
     }
+
     if (appState.device) {
-      appState.device.dailyLimitHours = val;
+      appState.device.daily_limit_hours = val;
       saveState();
       renderDeviceInfo();
+
+      const token = getAuthToken();
+      if (token && appState.device.id) {
+        try {
+          await fetch(`${API_BASE_URL}/devices/${appState.device.id}`, {
+            method: 'PATCH',
+            headers: getAuthHeaders(),
+            body: JSON.stringify({ daily_limit_hours: val })
+          });
+        } catch {
+          // Bỏ qua nếu offline
+        }
+      }
     }
   });
 
@@ -328,6 +493,7 @@ function showMainView(user) {
     user.email.toLowerCase() === DEMO_EMAIL ? 'Demo' : user.name;
   document.getElementById('current-user-email').textContent = user.email;
   renderAll();
+  startDevicePolling();
 }
 
 function switchTab(tabName) {
@@ -348,7 +514,7 @@ function renderAll() {
   renderUnlockRequests();
   renderLogs();
   renderRules();
-  document.getElementById('input-daily-limit').value = appState.device ? appState.device.dailyLimitHours : 3;
+  document.getElementById('input-daily-limit').value = appState.device ? appState.device.daily_limit_hours : 3;
 }
 
 function renderDeviceInfo() {
@@ -367,16 +533,21 @@ function renderDeviceInfo() {
     return;
   }
 
-  badge.innerHTML = `<span class="inline-block w-2 h-2 rounded-full bg-emerald-500 mr-1.5"></span>${d.name} (${d.screenTimeToday} / ${d.dailyLimitHours}h)`;
+  const timeFormatted = formatMinutesToHoursText(d.screen_time_minutes);
+  const isOnline = String(d.status).toLowerCase() === 'online';
+
+  badge.innerHTML = `<span class="inline-block w-2 h-2 rounded-full ${isOnline ? 'bg-emerald-500' : 'bg-slate-400'} mr-1.5"></span>${d.name} (${timeFormatted} / ${d.daily_limit_hours}h)`;
 
   card.innerHTML = `
     <div class="p-4 border border-slate-200 rounded-lg space-y-2">
       <div class="flex items-center justify-between">
         <span class="font-semibold text-sm text-slate-900">${d.name}</span>
-        <span class="px-2 py-0.5 text-[11px] rounded-full bg-emerald-100 text-emerald-700 font-medium">Online</span>
+        <span class="px-2 py-0.5 text-[11px] rounded-full ${isOnline ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-600'} font-medium">
+          ${isOnline ? 'Online' : 'Offline'}
+        </span>
       </div>
       <div class="text-xs text-slate-500">ID: ${d.id} • Hệ điều hành: ${d.os}</div>
-      <div class="text-xs text-slate-600">Thời gian dùng hôm nay: <strong>${d.screenTimeToday}</strong> (Giới hạn: ${d.dailyLimitHours} giờ)</div>
+      <div class="text-xs text-slate-600">Thời gian dùng hôm nay: <strong>${timeFormatted}</strong> (Giới hạn: ${d.daily_limit_hours} giờ)</div>
     </div>
   `;
 }
@@ -566,17 +737,17 @@ async function handleSimulatePredict() {
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 1200);
-    const res = await fetch(AI_API_URL, {
+    const res = await fetch(`${API_BASE_URL}/predict`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getAuthHeaders(),
       body: JSON.stringify({ text }),
       signal: controller.signal
     });
     clearTimeout(timer);
     if (res.ok) {
       const data = await res.json();
-      label = Number(data.label);
-      confidence = Number(data.confidence);
+      label = Number(data.label ?? data.prediction ?? 0);
+      confidence = Number(data.confidence ?? 0.95);
     } else {
       ({ label, confidence } = classifyLocalFallback(text));
     }
